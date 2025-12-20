@@ -1,4 +1,4 @@
-package com.App_Name
+package com.pocket_server
 
 import io.flutter.embedding.android.FlutterActivity
 
