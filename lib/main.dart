@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
+import 'package:pocket_server/services/java_downloader.dart';
 
 void main() => runApp(MyApp());
 
@@ -31,7 +32,27 @@ class JavaTestScreen extends StatefulWidget {
 class _JavaTestScreenState extends State<JavaTestScreen> {
   String _statusText = 'Press button to test Java installation';
   bool _isTesting = false;
+  bool _isDownloading = false;
 
+  /// Method to download and install Java environment
+  Future<void> _downloadJava() async {
+    setState(() {
+      _isDownloading = true;
+      _statusText = 'Downloading Java... Please wait.';
+    });
+
+    try {
+      final downloader = JavaDownloader();
+      await downloader.initEnvironment();
+      _showResult('Success!', 'Java downloaded and installed successfully.', isError: false);
+    } catch (e) {
+      _showResult('Download Failed', 'Error: $e', isError: true);
+    } finally {
+      setState(() => _isDownloading = false);
+    }
+  }
+
+  /// Method to run the 'java -version' command to verify installation
   Future<void> testJava() async {
     setState(() {
       _isTesting = true;
@@ -41,8 +62,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
     try {
       final appDir = await getApplicationDocumentsDirectory();
       final javaPath = "${appDir.path}/bin/jdk/bin/java";
-      
-      // Check if Java binary exists first
+
       final javaFile = File(javaPath);
       if (!await javaFile.exists()) {
         _showResult(
@@ -55,14 +75,12 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
 
       // Run java -version
       final result = await Process.run(javaPath, ['-version']);
-      
-      // Java prints version info to stderr (weird but normal)
+
       final output = result.stderr.toString().trim();
       final stdoutput = result.stdout.toString().trim();
-      
+
       if (result.exitCode == 0) {
-        // Success!
-        final version = output.split('\n').first; // Get first line
+        final version = output.split('\n').first;
         _showResult(
           '✓ Java Works!',
           'Version: $version\n\nFull output:\n$output${stdoutput.isNotEmpty ? '\n\nStdout:\n$stdoutput' : ''}',
@@ -93,7 +111,6 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       _statusText = title;
     });
 
-    // Show snackbar for quick feedback
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(title),
@@ -102,7 +119,6 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       ),
     );
 
-    // Show detailed dialog
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -157,17 +173,31 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
                 style: TextStyle(fontSize: 16),
               ),
               SizedBox(height: 32),
+              
+              // --- DOWNLOAD BUTTON ---
               ElevatedButton.icon(
-                onPressed: _isTesting ? null : testJava,
-                icon: _isTesting 
-                  ? SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Icon(Icons.play_arrow),
-                label: Text(_isTesting ? 'Testing...' : 'Test Java Installation'),
+                onPressed: _isDownloading || _isTesting ? null : _downloadJava,
+                icon: _isDownloading 
+                  ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) 
+                  : Icon(Icons.download),
+                label: Text(_isDownloading ? 'Downloading...' : 'Step 1: Download Java'),
                 style: ElevatedButton.styleFrom(
+                  minimumSize: Size(double.infinity, 50),
+                  backgroundColor: Colors.green.shade50,
+                ),
+              ),
+              
+              SizedBox(height: 16),
+
+              // --- TEST BUTTON ---
+              ElevatedButton.icon(
+                onPressed: _isTesting || _isDownloading ? null : testJava,
+                icon: _isTesting 
+                  ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Icon(Icons.play_arrow),
+                label: Text(_isTesting ? 'Testing...' : 'Step 2: Test Installation'),
+                style: ElevatedButton.styleFrom(
+                  minimumSize: Size(double.infinity, 50),
                   padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                 ),
               ),
