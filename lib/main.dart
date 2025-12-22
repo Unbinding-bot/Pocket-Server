@@ -33,22 +33,96 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
   String _statusText = 'Press button to test Java installation';
   bool _isTesting = false;
   bool _isDownloading = false;
+  double _downloadProgress = 0.0;
+  String _downloadStatus = '';
 
   /// Method to download and install Java environment
   Future<void> _downloadJava() async {
     setState(() {
       _isDownloading = true;
-      _statusText = 'Downloading Java... Please wait.';
+      _downloadProgress = 0.0;
+      _downloadStatus = 'Preparing download...';
     });
+
+    // Show progress dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: Row(
+            children: [
+              CircularProgressIndicator(strokeWidth: 2),
+              SizedBox(width: 16),
+              Text('Downloading Java'),
+            ],
+          ),
+          content: StatefulBuilder(
+            builder: (context, setDialogState) {
+              // Update the dialog when progress changes
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_downloadStatus),
+                  SizedBox(height: 16),
+                  LinearProgressIndicator(
+                    value: _downloadProgress,
+                    minHeight: 8,
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    '${(_downloadProgress * 100).toStringAsFixed(0)}%',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
 
     try {
       final downloader = JavaDownloader();
+      
+      // Set up progress callback
+      downloader.onProgress = (progress) {
+        setState(() {
+          _downloadProgress = progress;
+          _downloadStatus = 'Downloading JDK... ${(progress * 100).toStringAsFixed(0)}%';
+        });
+      };
+
       await downloader.initEnvironment();
-      _showResult('Success!', 'Java downloaded and installed successfully.', isError: false);
+      
+      // Close progress dialog
+      Navigator.pop(context);
+      
+      _showResult(
+        '✓ Success!', 
+        'Java has been downloaded and installed successfully.\n\nYou can now test the installation.',
+        isError: false,
+      );
+      
+      setState(() {
+        _statusText = 'Java installed successfully! Ready to test.';
+      });
     } catch (e) {
-      _showResult('Download Failed', 'Error: $e', isError: true);
+      // Close progress dialog
+      Navigator.pop(context);
+      
+      _showResult(
+        'Download Failed', 
+        'Error during download:\n\n$e\n\nPlease check your internet connection and try again.',
+        isError: true,
+      );
     } finally {
-      setState(() => _isDownloading = false);
+      setState(() {
+        _isDownloading = false;
+        _downloadProgress = 0.0;
+      });
     }
   }
 
@@ -67,7 +141,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       if (!await javaFile.exists()) {
         _showResult(
           'Java Not Found',
-          'Java binary does not exist at:\n$javaPath\n\nPlease run the downloader first.',
+          'Java binary does not exist at:\n$javaPath\n\nPlease run "Step 1: Download Java" first.',
           isError: true,
         );
         return;
@@ -83,20 +157,24 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
         final version = output.split('\n').first;
         _showResult(
           '✓ Java Works!',
-          'Version: $version\n\nFull output:\n$output${stdoutput.isNotEmpty ? '\n\nStdout:\n$stdoutput' : ''}',
+          'Java is working correctly!\n\nVersion: $version\n\nFull output:\n$output${stdoutput.isNotEmpty ? '\n\nStdout:\n$stdoutput' : ''}',
           isError: false,
         );
+        
+        setState(() {
+          _statusText = 'Java is working! ✓';
+        });
       } else {
         _showResult(
           'Java Error',
-          'Exit code: ${result.exitCode}\n\nStderr: $output\nStdout: $stdoutput',
+          'Java returned an error.\n\nExit code: ${result.exitCode}\n\nStderr: $output\nStdout: $stdoutput',
           isError: true,
         );
       }
     } catch (e) {
       _showResult(
-        'Error',
-        'Failed to run Java test:\n$e',
+        'Test Failed',
+        'Failed to run Java test:\n\n$e',
         isError: true,
       );
     } finally {
@@ -107,10 +185,6 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
   }
 
   void _showResult(String title, String message, {required bool isError}) {
-    setState(() {
-      _statusText = title;
-    });
-
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(title),
@@ -129,7 +203,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
               color: isError ? Colors.red : Colors.green,
             ),
             SizedBox(width: 8),
-            Text(title),
+            Expanded(child: Text(title)),
           ],
         ),
         content: SingleChildScrollView(

@@ -10,6 +10,9 @@ class JavaDownloader {
   static const String playitUrl = 
       "https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-aarch64";
 
+  // Callback for progress updates (optional)
+  Function(double)? onProgress;
+
   Future<void> initEnvironment() async {
     final appDir = await getApplicationDocumentsDirectory();
     final binDir = Directory('${appDir.path}/bin');
@@ -29,7 +32,7 @@ class JavaDownloader {
     final playitFile = File('${binDir.path}/playit');
     if (!playitFile.existsSync()) {
       print("Downloading Playit...");
-      await _downloadFile(playitUrl, playitFile.path);
+      await _downloadFileStreaming(playitUrl, playitFile.path);
       await _makeExecutable(playitFile.path);
     } else {
       print("Playit already installed");
@@ -50,11 +53,11 @@ class JavaDownloader {
   Future<void> _downloadAndExtractTarGz(String url, String targetPath) async {
     final tempFile = File('$targetPath/jdk_temp.tar.gz');
     
-    print("Downloading JDK from: $url");
-    await _downloadFile(url, tempFile.path);
+    print("Downloading JDK (this may take a few minutes)...");
+    await _downloadFileStreaming(url, tempFile.path);
     print("✓ Download complete (${(tempFile.lengthSync() / 1024 / 1024).toStringAsFixed(1)} MB)");
 
-    print("Extracting JDK...");
+    print("Extracting JDK (this may take a minute)...");
     final bytes = tempFile.readAsBytesSync();
     final decoded = GZipDecoder().decodeBytes(bytes);
     final archive = TarDecoder().decodeBytes(decoded);
@@ -97,12 +100,44 @@ class JavaDownloader {
     print("✓ JDK extraction complete");
   }
 
-  Future<void> _downloadFile(String url, String savePath) async {
-    final response = await http.get(Uri.parse(url));
-    if (response.statusCode == 200) {
-      await File(savePath).writeAsBytes(response.bodyBytes);
-    } else {
-      throw Exception("Download failed: HTTP ${response.statusCode}");
+  // Stream-based download to handle large files
+  Future<void> _downloadFileStreaming(String url, String savePath) async {
+    final client = http.Client();
+    try {
+      final request = http.Request('GET', Uri.parse(url));
+      final response = await client.send(request);
+      
+      if (response.statusCode != 200) {
+        throw Exception("Download failed: HTTP ${response.statusCode}");
+      }
+
+      final file = File(savePath);
+      final sink = file.openWrite();
+      
+      int downloaded = 0;
+      final totalBytes = response.contentLength ?? 0;
+      
+      await for (var chunk in response.stream) {
+        sink.add(chunk);
+        downloaded += chunk.length;
+        
+        if (totalBytes > 0 && onProgress != null) {
+          onProgress!(downloaded / totalBytes);
+        }
+        
+        // Print progress every 10MB
+        if (downloaded % (10 * 1024 * 1024) < chunk.length) {
+          print("Downloaded: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} MB" +
+                (totalBytes > 0 ? " / ${(totalBytes / 1024 / 1024).toStringAsFixed(1)} MB" : ""));
+        }
+      }
+      
+      await sink.flush();
+      await sink.close();
+      
+      print("✓ Download complete: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} MB");
+    } finally {
+      client.close();
     }
   }
 
