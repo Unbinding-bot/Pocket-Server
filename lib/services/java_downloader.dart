@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
+import 'package:pocket_server/services/debug_logger.dart';
 
 class JavaDownloader {
   static const String jdkUrl = 
@@ -12,6 +13,7 @@ class JavaDownloader {
 
   // Callback for progress updates (optional)
   Function(double)? onProgress;
+  final _logger = DebugLogger();
 
   Future<void> initEnvironment() async {
     final appDir = await getApplicationDocumentsDirectory();
@@ -22,42 +24,43 @@ class JavaDownloader {
 
     // 1. Install JDK
     if (!jdkDir.existsSync()) {
-      print("JDK not found. Starting download...");
+      _logger.info("JDK not found. Starting download...");
       await _downloadAndExtractTarGz(jdkUrl, binDir.path);
     } else {
-      print("JDK already installed at: ${jdkDir.path}");
+      _logger.info("JDK already installed at: ${jdkDir.path}");
     }
 
     // 2. Install Playit
     final playitFile = File('${binDir.path}/playit');
     if (!playitFile.existsSync()) {
-      print("Downloading Playit...");
+      _logger.info("Downloading Playit...");
       await _downloadFileStreaming(playitUrl, playitFile.path);
       await _makeExecutable(playitFile.path);
     } else {
-      print("Playit already installed");
+      _logger.info("Playit already installed");
     }
 
     // 3. Make Java executable
     final javaPath = '${jdkDir.path}/bin/java';
     if (await File(javaPath).exists()) {
       await _makeExecutable(javaPath);
-      print("✓ Java is ready at: $javaPath");
+      _logger.success("Java is ready at: $javaPath");
     } else {
+      _logger.error("Java binary not found after extraction at: $javaPath");
       throw Exception("Java binary not found after extraction at: $javaPath");
     }
     
-    print("✓ System Environment Ready");
+    _logger.success("System Environment Ready");
   }
 
   Future<void> _downloadAndExtractTarGz(String url, String targetPath) async {
     final tempFile = File('$targetPath/jdk_temp.tar.gz');
     
-    print("Downloading JDK (this may take a few minutes)...");
+    _logger.info("Downloading JDK (this may take a few minutes)...");
     await _downloadFileStreaming(url, tempFile.path);
-    print("✓ Download complete (${(tempFile.lengthSync() / 1024 / 1024).toStringAsFixed(1)} MB)");
+    _logger.success("Download complete (${(tempFile.lengthSync() / 1024 / 1024).toStringAsFixed(1)} MB)");
 
-    print("Extracting JDK (this may take a minute)...");
+    _logger.info("Extracting JDK (this may take a minute)...");
     final bytes = tempFile.readAsBytesSync();
     final decoded = GZipDecoder().decodeBytes(bytes);
     final archive = TarDecoder().decodeBytes(decoded);
@@ -70,15 +73,23 @@ class JavaDownloader {
       
       if (file.isFile) {
         final data = file.content as List<int>;
-        File(filePath)
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(data);
+        final outputFile = File(filePath);
+        outputFile.createSync(recursive: true);
+        
+        // Write with executable permissions for bin files
+        await outputFile.writeAsBytes(data, mode: FileMode.write, flush: true);
+        
+        // Set permissions immediately for executables
+        if (filePath.contains('/bin/')) {
+          await Process.run('chmod', ['755', filePath]);
+        }
+        
         fileCount++;
       } else {
         Directory(filePath).createSync(recursive: true);
       }
     }
-    print("✓ Extracted $fileCount files");
+    _logger.success("Extracted $fileCount files");
 
     // Find the extracted JDK folder (usually named like 'jdk-17.0.8.1+1')
     final extractedFolders = Directory(targetPath)
@@ -87,17 +98,18 @@ class JavaDownloader {
         .toList();
     
     if (extractedFolders.isEmpty) {
+      _logger.error("Could not find extracted JDK folder in $targetPath");
       throw Exception("Could not find extracted JDK folder in $targetPath");
     }
 
     final extractedFolder = extractedFolders.first as Directory;
     final finalPath = '$targetPath/jdk';
     
-    print("Renaming ${extractedFolder.path} -> $finalPath");
+    _logger.info("Renaming ${extractedFolder.path} -> $finalPath");
     await extractedFolder.rename(finalPath);
     await tempFile.delete();
     
-    print("✓ JDK extraction complete");
+    _logger.success("JDK extraction complete");
   }
 
   // Stream-based download to handle large files
@@ -108,6 +120,7 @@ class JavaDownloader {
       final response = await client.send(request);
       
       if (response.statusCode != 200) {
+        _logger.error("Download failed: HTTP ${response.statusCode}");
         throw Exception("Download failed: HTTP ${response.statusCode}");
       }
 
@@ -125,17 +138,21 @@ class JavaDownloader {
           onProgress!(downloaded / totalBytes);
         }
         
-        // Print progress every 10MB
+        // Log progress every 10MB
         if (downloaded % (10 * 1024 * 1024) < chunk.length) {
-          print("Downloaded: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} MB" +
-                (totalBytes > 0 ? " / ${(totalBytes / 1024 / 1024).toStringAsFixed(1)} MB" : ""));
+          final msg = "Downloaded: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} MB" +
+                (totalBytes > 0 ? " / ${(totalBytes / 1024 / 1024).toStringAsFixed(1)} MB" : "");
+          _logger.info(msg);
         }
       }
       
       await sink.flush();
       await sink.close();
       
-      print("✓ Download complete: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} MB");
+      _logger.success("Download complete: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} MB");
+    } catch (e) {
+      _logger.error("Download error: $e");
+      rethrow;
     } finally {
       client.close();
     }
@@ -143,14 +160,31 @@ class JavaDownloader {
 
   Future<void> _makeExecutable(String filePath) async {
     try {
-      final result = await Process.run('chmod', ['+x', filePath]);
+      // Method 1: Try chmod first
+      var result = await Process.run('chmod', ['755', filePath]);
       if (result.exitCode == 0) {
-        print("✓ Made executable: $filePath");
-      } else {
-        print("Warning: chmod failed for $filePath: ${result.stderr}");
+        _logger.success("Made executable (chmod): $filePath");
+        return;
       }
+      
+      // Method 2: Use Dart's File API to set permissions
+      final file = File(filePath);
+      if (await file.exists()) {
+        // Read and rewrite the file to set proper permissions
+        final bytes = await file.readAsBytes();
+        await file.writeAsBytes(bytes, mode: FileMode.write, flush: true);
+        
+        // Try running chmod again after rewriting
+        result = await Process.run('chmod', ['755', filePath]);
+        if (result.exitCode == 0) {
+          _logger.success("Made executable (after rewrite): $filePath");
+          return;
+        }
+      }
+      
+      _logger.warning("Could not set executable permissions for $filePath");
     } catch (e) {
-      print("Error setting permissions for $filePath: $e");
+      _logger.error("Error setting permissions for $filePath: $e");
     }
   }
 }

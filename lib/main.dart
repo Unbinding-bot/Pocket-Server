@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'package:pocket_server/services/java_downloader.dart';
+import 'package:pocket_server/services/debug_logger.dart';
 
 void main() => runApp(MyApp());
 
@@ -35,6 +36,57 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
   bool _isDownloading = false;
   double _downloadProgress = 0.0;
   String _downloadStatus = '';
+  final _logger = DebugLogger();
+
+  @override
+  void initState() {
+    super.initState();
+    // Set global context for snackbars after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _logger.setContext(context);
+    });
+  }
+
+  /// Debug method to check file structure
+  Future<void> _checkFiles() async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final binDir = Directory('${appDir.path}/bin');
+      final jdkDir = Directory('${appDir.path}/bin/jdk');
+      final javaPath = "${appDir.path}/bin/jdk/bin/java";
+      
+      String info = 'Base path: ${appDir.path}\n\n';
+      
+      info += 'bin/ exists: ${await binDir.exists()}\n';
+      info += 'jdk/ exists: ${await jdkDir.exists()}\n';
+      info += 'java binary exists: ${await File(javaPath).exists()}\n\n';
+      
+      if (await jdkDir.exists()) {
+        info += 'JDK contents:\n';
+        await for (var entity in jdkDir.list(recursive: false)) {
+          info += '  ${entity.path.split('/').last}\n';
+        }
+      }
+      
+      final javaBinDir = Directory('${appDir.path}/bin/jdk/bin');
+      if (await javaBinDir.exists()) {
+        info += '\nbin/ contents:\n';
+        await for (var entity in javaBinDir.list()) {
+          final name = entity.path.split('/').last;
+          if (entity is File) {
+            final stat = await entity.stat();
+            info += '  $name (${stat.size} bytes)\n';
+          } else {
+            info += '  $name/\n';
+          }
+        }
+      }
+      
+      _showResult('File Structure', info, isError: false);
+    } catch (e) {
+      _showResult('Debug Error', 'Error: $e', isError: true);
+    }
+  }
 
   /// Method to download and install Java environment
   Future<void> _downloadJava() async {
@@ -95,6 +147,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
         });
       };
 
+      _logger.info("Starting Java download...");
       await downloader.initEnvironment();
       
       // Close progress dialog
@@ -110,12 +163,13 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
         _statusText = 'Java installed successfully! Ready to test.';
       });
     } catch (e) {
+      _logger.error("Download failed: $e");
       // Close progress dialog
       Navigator.pop(context);
       
       _showResult(
         'Download Failed', 
-        'Error during download:\n\n$e\n\nPlease check your internet connection and try again.',
+        'Error during download:\n\n$e\n\nCheck the debug console for details.',
         isError: true,
       );
     } finally {
@@ -137,8 +191,11 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       final appDir = await getApplicationDocumentsDirectory();
       final javaPath = "${appDir.path}/bin/jdk/bin/java";
 
+      _logger.info("Checking Java at: $javaPath");
+
       final javaFile = File(javaPath);
       if (!await javaFile.exists()) {
+        _logger.error("Java binary not found at: $javaPath");
         _showResult(
           'Java Not Found',
           'Java binary does not exist at:\n$javaPath\n\nPlease run "Step 1: Download Java" first.',
@@ -147,6 +204,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
         return;
       }
 
+      _logger.info("Running: java -version");
       // Run java -version
       final result = await Process.run(javaPath, ['-version']);
 
@@ -155,6 +213,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
 
       if (result.exitCode == 0) {
         final version = output.split('\n').first;
+        _logger.success("Java test successful: $version");
         _showResult(
           '✓ Java Works!',
           'Java is working correctly!\n\nVersion: $version\n\nFull output:\n$output${stdoutput.isNotEmpty ? '\n\nStdout:\n$stdoutput' : ''}',
@@ -165,6 +224,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
           _statusText = 'Java is working! ✓';
         });
       } else {
+        _logger.error("Java test failed with exit code: ${result.exitCode}");
         _showResult(
           'Java Error',
           'Java returned an error.\n\nExit code: ${result.exitCode}\n\nStderr: $output\nStdout: $stdoutput',
@@ -172,9 +232,10 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
         );
       }
     } catch (e) {
+      _logger.error("Java test error: $e");
       _showResult(
         'Test Failed',
-        'Failed to run Java test:\n\n$e',
+        'Failed to run Java test:\n\n$e\n\nCheck the debug console for details.',
         isError: true,
       );
     } finally {
@@ -273,6 +334,29 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
                 style: ElevatedButton.styleFrom(
                   minimumSize: Size(double.infinity, 50),
                   padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                ),
+              ),
+              
+              SizedBox(height: 8),
+              
+              // --- DEBUG BUTTON ---
+              TextButton.icon(
+                onPressed: _checkFiles,
+                icon: Icon(Icons.info_outline, size: 16),
+                label: Text('Debug: Check Files', style: TextStyle(fontSize: 12)),
+              ),
+              
+              SizedBox(height: 8),
+              
+              // --- CONSOLE BUTTON ---
+              ElevatedButton.icon(
+                onPressed: () => DebugLogger.showDebugConsole(context),
+                icon: Icon(Icons.terminal),
+                label: Text('View Debug Console'),
+                style: ElevatedButton.styleFrom(
+                  minimumSize: Size(double.infinity, 50),
+                  backgroundColor: Colors.grey[850],
+                  foregroundColor: Colors.greenAccent,
                 ),
               ),
             ],
