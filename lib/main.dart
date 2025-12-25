@@ -4,6 +4,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'package:pocket_server/services/java_downloader.dart';
 import 'package:pocket_server/services/debug_logger.dart';
+import 'package:pocket_server/services/popup_service.dart';
 
 void main() => runApp(MyApp());
 
@@ -37,13 +38,15 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
   double _downloadProgress = 0.0;
   String _downloadStatus = '';
   final _logger = DebugLogger();
+  final _popup = PopupService();
 
   @override
   void initState() {
     super.initState();
-    // Set global context for snackbars after first frame
+    // Set global context for both services after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _logger.setContext(context);
+      _popup.setContext(context);
     });
   }
 
@@ -96,44 +99,11 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       _downloadStatus = 'Preparing download...';
     });
 
-    // Show progress dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => PopScope(
-        canPop: false,
-        child: AlertDialog(
-          title: Row(
-            children: [
-              CircularProgressIndicator(strokeWidth: 2),
-              SizedBox(width: 16),
-              Text('Downloading Java'),
-            ],
-          ),
-          content: StatefulBuilder(
-            builder: (context, setDialogState) {
-              // Update the dialog when progress changes
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(_downloadStatus),
-                  SizedBox(height: 16),
-                  LinearProgressIndicator(
-                    value: _downloadProgress,
-                    minHeight: 8,
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    '${(_downloadProgress * 100).toStringAsFixed(0)}%',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
+    // Show minimizable loading dialog
+    _popup.showLoadingWithProgress(
+      message: 'Preparing download...',
+      progress: 0.0,
+      canMinimize: true,
     );
 
     try {
@@ -145,18 +115,27 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
           _downloadProgress = progress;
           _downloadStatus = 'Downloading JDK... ${(progress * 100).toStringAsFixed(0)}%';
         });
+        
+        // Update the dialog
+        _popup.closeDialog();
+        _popup.showLoadingWithProgress(
+          message: 'Downloading JDK... ${(progress * 100).toStringAsFixed(0)}%',
+          progress: progress,
+          canMinimize: true,
+        );
       };
 
       _logger.info("Starting Java download...");
       await downloader.initEnvironment();
       
-      // Close progress dialog
-      Navigator.pop(context);
+      // Close loading dialog
+      _popup.closeDialog();
+      _popup.closeMinimized(); // Also close if minimized
       
-      _showResult(
-        '✓ Success!', 
-        'Java has been downloaded and installed successfully.\n\nYou can now test the installation.',
-        isError: false,
+      // Show success
+      _popup.showSuccessDialog(
+        title: '✓ Installation Complete', 
+        message: 'Java has been downloaded and installed successfully.\n\nYou can now test the installation.',
       );
       
       setState(() {
@@ -164,13 +143,15 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       });
     } catch (e) {
       _logger.error("Download failed: $e");
-      // Close progress dialog
-      Navigator.pop(context);
       
-      _showResult(
-        'Download Failed', 
-        'Error during download:\n\n$e\n\nCheck the debug console for details.',
-        isError: true,
+      // Close loading dialog
+      _popup.closeDialog();
+      _popup.closeMinimized();
+      
+      // Show error
+      _popup.showErrorDialog(
+        title: 'Download Failed', 
+        message: 'Error during download:\n\n$e\n\nCheck the debug console for details.',
       );
     } finally {
       setState(() {
@@ -196,28 +177,35 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       final javaFile = File(javaPath);
       if (!await javaFile.exists()) {
         _logger.error("Java binary not found at: $javaPath");
-        _showResult(
-          'Java Not Found',
-          'Java binary does not exist at:\n$javaPath\n\nPlease run "Step 1: Download Java" first.',
-          isError: true,
+        
+        await _popup.showErrorDialog(
+          title: 'Java Not Found',
+          message: 'Java binary does not exist at:\n$javaPath\n\nPlease run "Step 1: Download Java" first.',
         );
         return;
       }
 
       _logger.info("Running: java -version");
+      
+      // Show loading while testing
+      _popup.showLoading(message: "Testing Java...", canMinimize: false);
+      
       // Run java -version
       final result = await Process.run(javaPath, ['-version']);
 
       final output = result.stderr.toString().trim();
       final stdoutput = result.stdout.toString().trim();
 
+      // Close loading
+      _popup.closeDialog();
+
       if (result.exitCode == 0) {
         final version = output.split('\n').first;
         _logger.success("Java test successful: $version");
-        _showResult(
-          '✓ Java Works!',
-          'Java is working correctly!\n\nVersion: $version\n\nFull output:\n$output${stdoutput.isNotEmpty ? '\n\nStdout:\n$stdoutput' : ''}',
-          isError: false,
+        
+        await _popup.showSuccessDialog(
+          title: '✓ Java Works!',
+          message: 'Java is working correctly!\n\nVersion: $version\n\nFull output:\n$output${stdoutput.isNotEmpty ? '\n\nStdout:\n$stdoutput' : ''}',
         );
         
         setState(() {
@@ -225,18 +213,19 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
         });
       } else {
         _logger.error("Java test failed with exit code: ${result.exitCode}");
-        _showResult(
-          'Java Error',
-          'Java returned an error.\n\nExit code: ${result.exitCode}\n\nStderr: $output\nStdout: $stdoutput',
-          isError: true,
+        
+        await _popup.showErrorDialog(
+          title: 'Java Error',
+          message: 'Java returned an error.\n\nExit code: ${result.exitCode}\n\nStderr: $output\nStdout: $stdoutput',
         );
       }
     } catch (e) {
       _logger.error("Java test error: $e");
-      _showResult(
-        'Test Failed',
-        'Failed to run Java test:\n\n$e\n\nCheck the debug console for details.',
-        isError: true,
+      _popup.closeDialog(); // Make sure to close loading if error
+      
+      await _popup.showErrorDialog(
+        title: 'Test Failed',
+        message: 'Failed to run Java test:\n\n$e\n\nCheck the debug console for details.',
       );
     } finally {
       setState(() {

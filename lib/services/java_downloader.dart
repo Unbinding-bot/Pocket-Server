@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
 import 'package:pocket_server/services/debug_logger.dart';
+import 'package:pocket_server/services/popup_service.dart';
 
 class JavaDownloader {
   static const String jdkUrl = 
@@ -14,6 +15,7 @@ class JavaDownloader {
   // Callback for progress updates (optional)
   Function(double)? onProgress;
   final _logger = DebugLogger();
+  final _popup = PopupService();
 
   Future<void> initEnvironment() async {
     final appDir = await getApplicationDocumentsDirectory();
