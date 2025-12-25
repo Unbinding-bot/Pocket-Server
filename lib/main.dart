@@ -99,41 +99,41 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       _downloadStatus = 'Preparing download...';
     });
 
-    // Show minimizable loading dialog
-    _popup.showLoadingWithProgress(
-      message: 'Preparing download...',
-      progress: 0.0,
-      canMinimize: true,
-    );
-
     try {
       final downloader = JavaDownloader();
       
-      // Set up progress callback
+      // Set up progress callback - just update state, don't touch dialogs
       downloader.onProgress = (progress) {
         setState(() {
           _downloadProgress = progress;
           _downloadStatus = 'Downloading JDK... ${(progress * 100).toStringAsFixed(0)}%';
         });
-        
-        // Update the dialog
-        _popup.closeDialog();
-        _popup.showLoadingWithProgress(
-          message: 'Downloading JDK... ${(progress * 100).toStringAsFixed(0)}%',
-          progress: progress,
-          canMinimize: true,
-        );
       };
 
       _logger.info("Starting Java download...");
+      
+      // Show the download dialog with live progress
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => _DownloadProgressDialog(
+          getProgress: () => _downloadProgress,
+          getMessage: () => _downloadStatus,
+          onMinimize: () {
+            Navigator.pop(context);
+            _showMinimizedDownload();
+          },
+        ),
+      );
+      
       await downloader.initEnvironment();
       
-      // Close loading dialog
-      _popup.closeDialog();
+      // Close dialog
+      if (mounted) Navigator.pop(context);
       _popup.closeMinimized(); // Also close if minimized
       
       // Show success
-      _popup.showSuccessDialog(
+      await _popup.showSuccessDialog(
         title: '✓ Installation Complete', 
         message: 'Java has been downloaded and installed successfully.\n\nYou can now test the installation.',
       );
@@ -145,11 +145,11 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       _logger.error("Download failed: $e");
       
       // Close loading dialog
-      _popup.closeDialog();
+      if (mounted) Navigator.pop(context);
       _popup.closeMinimized();
       
       // Show error
-      _popup.showErrorDialog(
+      await _popup.showErrorDialog(
         title: 'Download Failed', 
         message: 'Error during download:\n\n$e\n\nCheck the debug console for details.',
       );
@@ -159,6 +159,77 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
         _downloadProgress = 0.0;
       });
     }
+  }
+
+  void _showMinimizedDownload() {
+    // Create minimized floating button manually
+    final overlay = Overlay.of(context);
+    late OverlayEntry overlayEntry;
+    
+    overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: 50,
+        right: 16,
+        child: Material(
+          elevation: 8,
+          borderRadius: BorderRadius.circular(30),
+          child: InkWell(
+            onTap: () {
+              overlayEntry.remove();
+              // Restore the dialog
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (context) => _DownloadProgressDialog(
+                  getProgress: () => _downloadProgress,
+                  getMessage: () => _downloadStatus,
+                  onMinimize: () {
+                    Navigator.pop(context);
+                    _showMinimizedDownload();
+                  },
+                ),
+              );
+            },
+            borderRadius: BorderRadius.circular(30),
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.blue,
+                borderRadius: BorderRadius.circular(30),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Colors.white),
+                      value: _downloadProgress,
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    'Downloading ${(_downloadProgress * 100).toStringAsFixed(0)}%',
+                    style: TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                  SizedBox(width: 8),
+                  InkWell(
+                    onTap: () {
+                      overlayEntry.remove();
+                    },
+                    child: Icon(Icons.close, color: Colors.white, size: 18),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    
+    overlay.insert(overlayEntry);
   }
 
   /// Method to run the 'java -version' command to verify installation
@@ -351,6 +422,98 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// Custom dialog that updates its content live
+class _DownloadProgressDialog extends StatefulWidget {
+  final double Function() getProgress;
+  final String Function() getMessage;
+  final VoidCallback onMinimize;
+
+  const _DownloadProgressDialog({
+    required this.getProgress,
+    required this.getMessage,
+    required this.onMinimize,
+  });
+
+  @override
+  State<_DownloadProgressDialog> createState() => _DownloadProgressDialogState();
+}
+
+class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
+  @override
+  void initState() {
+    super.initState();
+    // Rebuild every 100ms to show live progress
+    _startPeriodicUpdate();
+  }
+
+  void _startPeriodicUpdate() {
+    Future.delayed(Duration(milliseconds: 100), () {
+      if (mounted) {
+        setState(() {});
+        _startPeriodicUpdate();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = widget.getProgress();
+    final message = widget.getMessage();
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Title bar with minimize button
+          Container(
+            padding: EdgeInsets.fromLTRB(20, 12, 12, 12),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Downloading Java',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.minimize, size: 20),
+                  onPressed: widget.onMinimize,
+                  tooltip: "Minimize",
+                  padding: EdgeInsets.zero,
+                  constraints: BoxConstraints(),
+                ),
+              ],
+            ),
+          ),
+          // Content
+          Padding(
+            padding: EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(message, style: TextStyle(fontSize: 16)),
+                SizedBox(height: 16),
+                LinearProgressIndicator(value: progress, minHeight: 8),
+                SizedBox(height: 8),
+                Text(
+                  '${(progress * 100).toStringAsFixed(0)}%',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
