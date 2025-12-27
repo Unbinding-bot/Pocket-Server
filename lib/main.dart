@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:pocket_server/services/java_downloader.dart';
 import 'package:pocket_server/services/debug_logger.dart';
 import 'package:pocket_server/services/popup_service.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() => runApp(MyApp());
 
@@ -35,6 +36,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
   String _statusText = 'Press button to test Java installation';
   bool _isTesting = false;
   bool _isDownloading = false;
+  bool _hasStoragePermission = false;
   double _downloadProgress = 0.0;
   String _downloadStatus = '';
   final _logger = DebugLogger();
@@ -47,7 +49,92 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _logger.setContext(context);
       _popup.setContext(context);
+      _checkPermissions();
     });
+  }
+
+  /// Check and request necessary permissions
+  Future<void> _checkPermissions() async {
+    _logger.info("Checking permissions...");
+
+    // Check storage permission
+    var storageStatus = await Permission.storage.status;
+    var manageStorageStatus = await Permission.manageExternalStorage.status;
+
+    _logger.info("Storage permission: ${storageStatus}");
+    _logger.info("Manage storage permission: ${manageStorageStatus}");
+
+    // If not granted, show explanation and request
+    if (!storageStatus.isGranted && !manageStorageStatus.isGranted) {
+      final shouldRequest = await _popup.showConfirmation(
+        title: "Storage Permission Required",
+        message: "PocketHost needs storage access to:\n\n"
+            "• Download and install Java\n"
+            "• Store Minecraft server files\n"
+            "• Save world data\n\n"
+            "Grant storage permission?",
+        confirmText: "Grant Permission",
+        cancelText: "Not Now",
+      );
+
+      if (shouldRequest) {
+        _logger.info("Requesting storage permissions...");
+        
+        // Request permissions
+        Map<Permission, PermissionStatus> statuses = await [
+          Permission.storage,
+          Permission.manageExternalStorage,
+        ].request();
+
+        _logger.info("Permission results: $statuses");
+
+        if (statuses[Permission.storage]!.isGranted || 
+            statuses[Permission.manageExternalStorage]!.isGranted) {
+          _popup.showSuccess("Storage permission granted!");
+          setState(() => _hasStoragePermission = true);
+          _testStorageAccess();
+        } else if (statuses[Permission.storage]!.isPermanentlyDenied ||
+                   statuses[Permission.manageExternalStorage]!.isPermanentlyDenied) {
+          _popup.showErrorDialog(
+            title: "Permission Denied",
+            message: "Storage permission was permanently denied.\n\n"
+                "Please enable it manually in:\n"
+                "Settings → Apps → PocketHost → Permissions",
+          );
+        } else {
+          _popup.showWarning("Storage permission denied. Some features may not work.");
+        }
+      }
+    } else {
+      _logger.success("Storage permissions already granted");
+      setState(() => _hasStoragePermission = true);
+      _testStorageAccess();
+    }
+  }
+
+  /// Test if we can actually write to storage
+  Future<void> _testStorageAccess() async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      _logger.info("App directory: ${appDir.path}");
+      
+      // Test write access
+      final testFile = File('${appDir.path}/test.txt');
+      await testFile.writeAsString('test');
+      await testFile.delete();
+      
+      _logger.success("Storage access confirmed: ${appDir.path}");
+      
+      setState(() {
+        _statusText = 'Ready! Storage access confirmed.';
+      });
+    } catch (e) {
+      _logger.error("Storage access test failed: $e");
+      _popup.showErrorDialog(
+        title: "Storage Access Failed",
+        message: "Cannot write to app directory:\n\n$e",
+      );
+    }
   }
 
   /// Debug method to check file structure
@@ -362,6 +449,41 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
                 color: Colors.blue,
               ),
               SizedBox(height: 24),
+              
+              // Storage permission indicator
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: _hasStoragePermission ? Colors.green[50] : Colors.orange[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: _hasStoragePermission ? Colors.green : Colors.orange,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _hasStoragePermission ? Icons.check_circle : Icons.warning,
+                      color: _hasStoragePermission ? Colors.green : Colors.orange,
+                      size: 20,
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      _hasStoragePermission 
+                          ? 'Storage Access: OK' 
+                          : 'Storage Access: Required',
+                      style: TextStyle(
+                        color: _hasStoragePermission ? Colors.green[900] : Colors.orange[900],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              SizedBox(height: 16),
               Text(
                 _statusText,
                 textAlign: TextAlign.center,
@@ -371,7 +493,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
               
               // --- DOWNLOAD BUTTON ---
               ElevatedButton.icon(
-                onPressed: _isDownloading || _isTesting ? null : _downloadJava,
+                onPressed: (_isDownloading || _isTesting || !_hasStoragePermission) ? null : _downloadJava,
                 icon: _isDownloading 
                   ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) 
                   : Icon(Icons.download),

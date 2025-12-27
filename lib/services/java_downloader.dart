@@ -63,55 +63,118 @@ class JavaDownloader {
     _logger.success("Download complete (${(tempFile.lengthSync() / 1024 / 1024).toStringAsFixed(1)} MB)");
 
     _logger.info("Extracting JDK (this may take a minute)...");
-    final bytes = tempFile.readAsBytesSync();
-    final decoded = GZipDecoder().decodeBytes(bytes);
-    final archive = TarDecoder().decodeBytes(decoded);
-
-    // Extract all files
-    int fileCount = 0;
-    for (final file in archive) {
-      final filename = file.name;
-      final filePath = '$targetPath/$filename';
+    
+    try {
+      final bytes = await tempFile.readAsBytes();
+      _logger.info("Read ${bytes.length} bytes from archive");
       
-      if (file.isFile) {
-        final data = file.content as List<int>;
-        final outputFile = File(filePath);
-        outputFile.createSync(recursive: true);
+      final decoded = GZipDecoder().decodeBytes(bytes);
+      _logger.info("GZip decoded: ${decoded.length} bytes");
+      
+      final archive = TarDecoder().decodeBytes(decoded);
+      _logger.info("Tar archive contains ${archive.length} files");
+
+      // Extract all files
+      int fileCount = 0;
+      int dirCount = 0;
+      
+      for (final file in archive) {
+        final filename = file.name;
+        final filePath = '$targetPath/$filename';
         
-        // Write with executable permissions for bin files
-        await outputFile.writeAsBytes(data, mode: FileMode.write, flush: true);
-        
-        // Set permissions immediately for executables
-        if (filePath.contains('/bin/')) {
-          await Process.run('chmod', ['755', filePath]);
+        if (file.isFile) {
+          final data = file.content as List<int>;
+          final outputFile = File(filePath);
+          outputFile.createSync(recursive: true);
+          
+          // Write with executable permissions for bin files
+          await outputFile.writeAsBytes(data, mode: FileMode.write, flush: true);
+          
+          // Set permissions immediately for executables
+          if (filePath.contains('/bin/')) {
+            await Process.run('chmod', ['755', filePath]);
+          }
+          
+          fileCount++;
+          
+          // Log key files
+          if (filename.contains('bin/java')) {
+            _logger.info("Extracted: $filename (${data.length} bytes)");
+          }
+        } else {
+          Directory(filePath).createSync(recursive: true);
+          dirCount++;
         }
-        
-        fileCount++;
-      } else {
-        Directory(filePath).createSync(recursive: true);
       }
-    }
-    _logger.success("Extracted $fileCount files");
+      _logger.success("Extracted $fileCount files and $dirCount directories");
 
-    // Find the extracted JDK folder (usually named like 'jdk-17.0.8.1+1')
-    final extractedFolders = Directory(targetPath)
-        .listSync()
-        .where((e) => e is Directory && e.path.contains("jdk-17"))
-        .toList();
-    
-    if (extractedFolders.isEmpty) {
-      _logger.error("Could not find extracted JDK folder in $targetPath");
-      throw Exception("Could not find extracted JDK folder in $targetPath");
-    }
+      // List what was actually extracted in targetPath
+      _logger.info("Contents of $targetPath:");
+      final contents = Directory(targetPath).listSync();
+      for (var item in contents) {
+        final name = item.path.split('/').last;
+        if (item is Directory) {
+          _logger.info("  DIR: $name");
+        } else if (item is File) {
+          final size = (item as File).lengthSync();
+          _logger.info("  FILE: $name (${size} bytes)");
+        }
+      }
 
-    final extractedFolder = extractedFolders.first as Directory;
-    final finalPath = '$targetPath/jdk';
-    
-    _logger.info("Renaming ${extractedFolder.path} -> $finalPath");
-    await extractedFolder.rename(finalPath);
-    await tempFile.delete();
-    
-    _logger.success("JDK extraction complete");
+      // Find the extracted JDK folder (usually named like 'jdk-17.0.8.1+1')
+      final extractedFolders = Directory(targetPath)
+          .listSync()
+          .where((e) => e is Directory && e.path.contains("jdk-17"))
+          .toList();
+      
+      if (extractedFolders.isEmpty) {
+        _logger.error("Could not find extracted JDK folder in $targetPath");
+        _logger.error("Looking for folders containing 'jdk-17'");
+        throw Exception("Could not find extracted JDK folder in $targetPath");
+      }
+
+      final extractedFolder = extractedFolders.first as Directory;
+      final finalPath = '$targetPath/jdk';
+      
+      _logger.info("Found JDK folder: ${extractedFolder.path}");
+      _logger.info("Renaming to: $finalPath");
+      
+      // Check if jdk folder already exists and delete it
+      final existingJdk = Directory(finalPath);
+      if (await existingJdk.exists()) {
+        _logger.warning("Removing existing jdk folder");
+        await existingJdk.delete(recursive: true);
+      }
+      
+      await extractedFolder.rename(finalPath);
+      await tempFile.delete();
+      
+      // Verify the java binary exists
+      final javaPath = '$finalPath/bin/java';
+      final javaFile = File(javaPath);
+      if (await javaFile.exists()) {
+        final javaSize = await javaFile.length();
+        _logger.success("Java binary found: $javaPath (${javaSize} bytes)");
+      } else {
+        _logger.error("Java binary NOT found at: $javaPath");
+        // List what's in the bin directory
+        final binDir = Directory('$finalPath/bin');
+        if (await binDir.exists()) {
+          _logger.info("Contents of bin/:");
+          await for (var item in binDir.list()) {
+            _logger.info("  ${item.path.split('/').last}");
+          }
+        } else {
+          _logger.error("bin/ directory does not exist!");
+        }
+      }
+      
+      _logger.success("JDK extraction complete");
+    } catch (e, stackTrace) {
+      _logger.error("Extraction failed: $e");
+      _logger.error("Stack trace: $stackTrace");
+      rethrow;
+    }
   }
 
   // Stream-based download to handle large files

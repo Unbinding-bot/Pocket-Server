@@ -1,4 +1,4 @@
-package com.pocket_server
+package com.Pocket_Server
 
 import io.flutter.embedding.android.FlutterActivity
 
