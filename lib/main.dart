@@ -2,10 +2,10 @@
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
-import 'package:pocket_server/services/java_downloader.dart';
-import 'package:pocket_server/services/debug_logger.dart';
-import 'package:pocket_server/services/popup_service.dart';
-import 'package:pocket_server/services/permission_handler.dart';
+import 'package:PocketServer/services/java_downloader.dart';
+import 'package:PocketServer/services/debug_logger.dart';
+import 'package:PocketServer/services/popup_service.dart';
+import 'package:PocketServer/services/permission_handler.dart';
 
 void main() => runApp(MyApp());
 

@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
-import 'package:pocket_server/services/debug_logger.dart';
-import 'package:pocket_server/services/popup_service.dart';
+import 'package:PocketServer/services/debug_logger.dart';
+import 'package:PocketServer/services/popup_service.dart';
 
 class JavaDownloader {
   static const String jdkUrl = 
