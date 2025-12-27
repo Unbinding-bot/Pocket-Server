@@ -2,9 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
-import 'package:PocketServer/services/java_downloader.dart';
-import 'package:PocketServer/services/debug_logger.dart';
-import 'package:PocketServer/services/popup_service.dart';
+import 'package:pocket_server/services/java_downloader.dart';
+import 'package:pocket_server/services/debug_logger.dart';
+import 'package:pocket_server/services/popup_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 void main() => runApp(MyApp());
@@ -235,11 +235,20 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       if (mounted) Navigator.pop(context);
       _popup.closeMinimized();
       
-      // Show error
-      await _popup.showErrorDialog(
-        title: 'Download Failed', 
-        message: 'Error during download:\n\n$e\n\nCheck the debug console for details.',
+      // Show error with retry option
+      final shouldRetry = await _popup.showConfirmation(
+        title: 'Download Failed',
+        message: 'Error during download:\n\n$e\n\nThis usually happens due to network issues. Would you like to retry?',
+        confirmText: 'Retry',
+        cancelText: 'Cancel',
       );
+      
+      if (shouldRetry) {
+        // Retry the download
+        await Future.delayed(Duration(seconds: 1));
+        _downloadJava();
+        return;
+      }
     } finally {
       setState(() {
         _isDownloading = false;

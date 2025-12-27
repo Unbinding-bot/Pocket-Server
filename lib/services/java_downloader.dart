@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
-import 'package:PocketServer/services/debug_logger.dart';
-import 'package:PocketServer/services/popup_service.dart';
+import 'package:pocket_server/services/debug_logger.dart';
+import 'package:pocket_server/services/popup_service.dart';
 
 class JavaDownloader {
   static const String jdkUrl = 
@@ -179,10 +179,48 @@ class JavaDownloader {
 
   // Stream-based download to handle large files
   Future<void> _downloadFileStreaming(String url, String savePath) async {
+    const maxRetries = 3;
+    int retryCount = 0;
+    
+    while (retryCount < maxRetries) {
+      try {
+        await _attemptDownload(url, savePath);
+        return; // Success, exit
+      } catch (e) {
+        retryCount++;
+        _logger.warning("Download attempt $retryCount failed: $e");
+        
+        if (retryCount < maxRetries) {
+          _logger.info("Retrying in 3 seconds...");
+          await Future.delayed(Duration(seconds: 3));
+        } else {
+          _logger.error("Download failed after $maxRetries attempts");
+          rethrow;
+        }
+      }
+    }
+  }
+
+  Future<void> _attemptDownload(String url, String savePath) async {
     final client = http.Client();
     try {
+      _logger.info("Starting download from: $url");
+      
       final request = http.Request('GET', Uri.parse(url));
-      final response = await client.send(request);
+      
+      // Add headers to help with connection stability
+      request.headers.addAll({
+        'User-Agent': 'PocketHost/1.0',
+        'Accept': '*/*',
+        'Connection': 'keep-alive',
+      });
+      
+      final response = await client.send(request).timeout(
+        Duration(minutes: 10),
+        onTimeout: () {
+          throw Exception('Download timeout after 10 minutes');
+        },
+      );
       
       if (response.statusCode != 200) {
         _logger.error("Download failed: HTTP ${response.statusCode}");
@@ -194,8 +232,16 @@ class JavaDownloader {
       
       int downloaded = 0;
       final totalBytes = response.contentLength ?? 0;
+      int lastProgressUpdate = 0;
       
-      await for (var chunk in response.stream) {
+      _logger.info("Downloading ${(totalBytes / 1024 / 1024).toStringAsFixed(1)} MB");
+      
+      await for (var chunk in response.stream.timeout(
+        Duration(seconds: 30), // Timeout if no data for 30 seconds
+        onTimeout: (sink) {
+          sink.addError(Exception('Stream timeout - no data received for 30 seconds'));
+        },
+      )) {
         sink.add(chunk);
         downloaded += chunk.length;
         
@@ -204,7 +250,8 @@ class JavaDownloader {
         }
         
         // Log progress every 10MB
-        if (downloaded % (10 * 1024 * 1024) < chunk.length) {
+        if (downloaded - lastProgressUpdate >= 10 * 1024 * 1024) {
+          lastProgressUpdate = downloaded;
           final msg = "Downloaded: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} MB" +
                 (totalBytes > 0 ? " / ${(totalBytes / 1024 / 1024).toStringAsFixed(1)} MB" : "");
           _logger.info(msg);
@@ -215,8 +262,24 @@ class JavaDownloader {
       await sink.close();
       
       _logger.success("Download complete: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} MB");
+      
+      // Verify file size
+      if (totalBytes > 0 && downloaded != totalBytes) {
+        throw Exception('Download incomplete: got $downloaded bytes, expected $totalBytes bytes');
+      }
+      
     } catch (e) {
       _logger.error("Download error: $e");
+      
+      // Clean up partial file
+      try {
+        final file = File(savePath);
+        if (await file.exists()) {
+          await file.delete();
+          _logger.info("Deleted partial download file");
+        }
+      } catch (_) {}
+      
       rethrow;
     } finally {
       client.close();
