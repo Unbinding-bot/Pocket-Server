@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:PocketServer/services/java_downloader.dart';
 import 'package:PocketServer/services/debug_logger.dart';
 import 'package:PocketServer/services/popup_service.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:PocketServer/services/permission_handler.dart';
 
 void main() => runApp(MyApp());
 
@@ -45,7 +45,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
   @override
   void initState() {
     super.initState();
-    // Set global context for both services after first frame
+    // Set global context for services after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _logger.setContext(context);
       _popup.setContext(context);
@@ -53,61 +53,18 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
     });
   }
 
-  /// Check and request necessary permissions
+  /// Check and request necessary permissions using the handler
   Future<void> _checkPermissions() async {
-    _logger.info("Checking permissions...");
+    final granted = await AppPermissionHandler.checkAndRequestWithUI(context);
+    
+    setState(() {
+      _hasStoragePermission = granted;
+      _statusText = granted 
+          ? 'Ready! All permissions granted.' 
+          : 'Permissions required to continue';
+    });
 
-    // Check storage permission
-    var storageStatus = await Permission.storage.status;
-    var manageStorageStatus = await Permission.manageExternalStorage.status;
-
-    _logger.info("Storage permission: ${storageStatus}");
-    _logger.info("Manage storage permission: ${manageStorageStatus}");
-
-    // If not granted, show explanation and request
-    if (!storageStatus.isGranted && !manageStorageStatus.isGranted) {
-      final shouldRequest = await _popup.showConfirmation(
-        title: "Storage Permission Required",
-        message: "PocketHost needs storage access to:\n\n"
-            "• Download and install Java\n"
-            "• Store Minecraft server files\n"
-            "• Save world data\n\n"
-            "Grant storage permission?",
-        confirmText: "Grant Permission",
-        cancelText: "Not Now",
-      );
-
-      if (shouldRequest) {
-        _logger.info("Requesting storage permissions...");
-        
-        // Request permissions
-        Map<Permission, PermissionStatus> statuses = await [
-          Permission.storage,
-          Permission.manageExternalStorage,
-        ].request();
-
-        _logger.info("Permission results: $statuses");
-
-        if (statuses[Permission.storage]!.isGranted || 
-            statuses[Permission.manageExternalStorage]!.isGranted) {
-          _popup.showSuccess("Storage permission granted!");
-          setState(() => _hasStoragePermission = true);
-          _testStorageAccess();
-        } else if (statuses[Permission.storage]!.isPermanentlyDenied ||
-                   statuses[Permission.manageExternalStorage]!.isPermanentlyDenied) {
-          _popup.showErrorDialog(
-            title: "Permission Denied",
-            message: "Storage permission was permanently denied.\n\n"
-                "Please enable it manually in:\n"
-                "Settings → Apps → PocketHost → Permissions",
-          );
-        } else {
-          _popup.showWarning("Storage permission denied. Some features may not work.");
-        }
-      }
-    } else {
-      _logger.success("Storage permissions already granted");
-      setState(() => _hasStoragePermission = true);
+    if (granted) {
       _testStorageAccess();
     }
   }
@@ -470,25 +427,34 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
                     width: 1,
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      _hasStoragePermission ? Icons.check_circle : Icons.warning,
-                      color: _hasStoragePermission ? Colors.green : Colors.orange,
-                      size: 20,
-                    ),
-                    SizedBox(width: 8),
-                    Text(
-                      _hasStoragePermission 
-                          ? 'Storage Access: OK' 
-                          : 'Storage Access: Required',
-                      style: TextStyle(
-                        color: _hasStoragePermission ? Colors.green[900] : Colors.orange[900],
-                        fontWeight: FontWeight.bold,
+                child: InkWell(
+                  onTap: () => AppPermissionHandler.showPermissionStatus(context),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _hasStoragePermission ? Icons.check_circle : Icons.warning,
+                        color: _hasStoragePermission ? Colors.green : Colors.orange,
+                        size: 20,
                       ),
-                    ),
-                  ],
+                      SizedBox(width: 8),
+                      Text(
+                        _hasStoragePermission 
+                            ? 'Storage Access: OK' 
+                            : 'Storage Access: Required',
+                        style: TextStyle(
+                          color: _hasStoragePermission ? Colors.green[900] : Colors.orange[900],
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(width: 4),
+                      Icon(
+                        Icons.info_outline,
+                        size: 16,
+                        color: _hasStoragePermission ? Colors.green[700] : Colors.orange[700],
+                      ),
+                    ],
+                  ),
                 ),
               ),
               
