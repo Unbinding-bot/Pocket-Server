@@ -16,7 +16,7 @@
     
     <!-- Request legacy external storage for Android 10 (API 29) -->
     <application
-        android:label="Pocket-Server"
+        android:label="PocketServer"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">

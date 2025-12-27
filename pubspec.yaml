@@ -1,4 +1,4 @@
-name: "Pocket-Server"
+name: PocketServer
 description: "PocketServer: A mobile Minecraft Java Edition server manager."
 publish_to: 'none'
 
