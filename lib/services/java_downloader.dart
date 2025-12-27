@@ -1,10 +1,10 @@
 // lib/services/java_downloader.dart
 import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
 import 'package:PocketServer/services/debug_logger.dart';
 import 'package:PocketServer/services/popup_service.dart';
+import 'package:PocketServer/services/file_system_service.dart';
 
 class JavaDownloader {
   static const String jdkUrl = 
@@ -16,38 +16,44 @@ class JavaDownloader {
   Function(double)? onProgress;
   final _logger = DebugLogger();
   final _popup = PopupService();
+  final _fs = FileSystemService();
 
   Future<void> initEnvironment() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    final binDir = Directory('${appDir.path}/bin');
-    final jdkDir = Directory('${binDir.path}/jdk');
-
-    if (!binDir.existsSync()) binDir.createSync(recursive: true);
+    // Register our paths with the file system service
+    _registerPaths();
+    
+    // Ensure file system is initialized
+    await _fs.initialize();
+    
+    _logger.info("Using storage: ${_fs.basePath}");
+    _logger.info("Executable: ${_fs.canExecute}");
 
     // 1. Install JDK
-    if (!jdkDir.existsSync()) {
+    final jdkPath = _fs.getPath('java_jdk');
+    if (!await _fs.directoryExists(jdkPath)) {
       _logger.info("JDK not found. Starting download...");
-      await _downloadAndExtractTarGz(jdkUrl, binDir.path);
+      final binPath = _fs.getPath('java_bin');
+      await _downloadAndExtractTarGz(jdkUrl, binPath);
     } else {
-      _logger.info("JDK already installed at: ${jdkDir.path}");
+      _logger.info("JDK already installed at: $jdkPath");
     }
 
     // 2. Install Playit
-    final playitFile = File('${binDir.path}/playit');
-    if (!playitFile.existsSync()) {
+    final playitPath = _fs.getPath('playit_binary');
+    if (!await _fs.fileExists(playitPath)) {
       _logger.info("Downloading Playit...");
-      await _downloadFileStreaming(playitUrl, playitFile.path);
-      await _makeExecutable(playitFile.path);
+      await _downloadFileStreaming(playitUrl, playitPath);
+      await _fs.makeExecutable(playitPath);
     } else {
       _logger.info("Playit already installed");
     }
 
-    // 3. Make Java executable
-    final javaPath = '${jdkDir.path}/bin/java';
-    if (await File(javaPath).exists()) {
-      await _makeExecutable(javaPath);
+    // 3. Make Java executable and test
+    final javaPath = _fs.getPath('java_binary');
+    if (await _fs.fileExists(javaPath)) {
+      await _fs.makeExecutable(javaPath);
       
-      // Test if it's actually executable
+      // Test execution
       try {
         _logger.info("Testing Java execution...");
         final testResult = await Process.run(javaPath, ['--version']).timeout(
@@ -58,33 +64,67 @@ class JavaDownloader {
         if (testResult.exitCode == 0 || testResult.stderr.toString().contains('version')) {
           _logger.success("Java is executable and working!");
         } else {
-          _logger.warning("Java executed but returned unexpected output");
-          _logger.info("Exit code: ${testResult.exitCode}");
-          _logger.info("Stderr: ${testResult.stderr}");
+          throw Exception("Java returned unexpected output");
         }
       } catch (e) {
         _logger.error("Java execution test failed: $e");
-        _logger.warning("Java binary may not be executable on this device");
         
-        // Create a workaround script
-        final scriptPath = '${binDir.path}/run-java.sh';
-        final script = File(scriptPath);
-        await script.writeAsString('''#!/system/bin/sh
-export JAVA_HOME="${jdkDir.path}"
-export PATH="\$JAVA_HOME/bin:\$PATH"
-exec \$JAVA_HOME/bin/java "\$@"
-''');
-        await Process.run('chmod', ['755', scriptPath]);
-        _logger.info("Created wrapper script at: $scriptPath");
+        if (!_fs.canExecute) {
+          throw Exception(
+            "Device does not support binary execution.\n\n"
+            "Your device prevents running executable files (noexec flag).\n"
+            "Try: Settings → Storage → Format as Internal Storage"
+          );
+        }
+        
+        throw Exception("Java binary cannot be executed: $e");
       }
       
       _logger.success("Java is ready at: $javaPath");
     } else {
-      _logger.error("Java binary not found after extraction at: $javaPath");
-      throw Exception("Java binary not found after extraction at: $javaPath");
+      _logger.error("Java binary not found after extraction");
+      throw Exception("Java binary not found after extraction");
     }
     
     _logger.success("System Environment Ready");
+    _logger.info("Storage location: ${_fs.basePath}");
+  }
+
+  /// Register all paths that JavaDownloader needs
+  void _registerPaths() {
+    // Binary folder (needs execution support)
+    _fs.registerPath(
+      'java_bin',
+      'bin',
+      requirements: {LocationRequirement.executable, LocationRequirement.persistent},
+      description: 'Binary storage for Java and Playit',
+    );
+
+    // JDK installation directory
+    _fs.registerPath(
+      'java_jdk',
+      'bin/jdk',
+      requirements: {LocationRequirement.executable, LocationRequirement.persistent},
+      description: 'Java Development Kit installation',
+    );
+
+    // Java binary itself
+    _fs.registerPath(
+      'java_binary',
+      'bin/jdk/bin/java',
+      requirements: {LocationRequirement.executable, LocationRequirement.persistent},
+      description: 'Java executable binary',
+    );
+
+    // Playit binary
+    _fs.registerPath(
+      'playit_binary',
+      'bin/playit',
+      requirements: {LocationRequirement.executable, LocationRequirement.persistent},
+      description: 'Playit.gg tunnel binary',
+    );
+
+    _logger.info("JavaDownloader paths registered");
   }
 
   Future<void> _downloadAndExtractTarGz(String url, String targetPath) async {

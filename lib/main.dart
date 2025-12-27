@@ -6,6 +6,7 @@ import 'package:PocketServer/services/java_downloader.dart';
 import 'package:PocketServer/services/debug_logger.dart';
 import 'package:PocketServer/services/popup_service.dart';
 import 'package:PocketServer/services/permission_handler.dart';
+import 'package:PocketServer/services/file_system_service.dart';
 
 void main() => runApp(MyApp());
 
@@ -41,6 +42,7 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
   String _downloadStatus = '';
   final _logger = DebugLogger();
   final _popup = PopupService();
+  final _fs = FileSystemService();
 
   @override
   void initState() {
@@ -72,24 +74,18 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
   /// Test if we can actually write to storage
   Future<void> _testStorageAccess() async {
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      _logger.info("App directory: ${appDir.path}");
-      
-      // Test write access
-      final testFile = File('${appDir.path}/test.txt');
-      await testFile.writeAsString('test');
-      await testFile.delete();
-      
-      _logger.success("Storage access confirmed: ${appDir.path}");
+      await _fs.initialize();
+      _logger.success("Storage initialized: ${_fs.basePath}");
+      _logger.info(_fs.getStorageInfo());
       
       setState(() {
-        _statusText = 'Ready! Storage access confirmed.';
+        _statusText = 'Ready! Storage: ${_fs.basePath}';
       });
     } catch (e) {
-      _logger.error("Storage access test failed: $e");
+      _logger.error("Storage initialization failed: $e");
       _popup.showErrorDialog(
         title: "Storage Access Failed",
-        message: "Cannot write to app directory:\n\n$e",
+        message: "Cannot initialize storage:\n\n$e",
       );
     }
   }
@@ -97,39 +93,11 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
   /// Debug method to check file structure
   Future<void> _checkFiles() async {
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final binDir = Directory('${appDir.path}/bin');
-      final jdkDir = Directory('${appDir.path}/bin/jdk');
-      final javaPath = "${appDir.path}/bin/jdk/bin/java";
+      await _fs.initialize();
       
-      String info = 'Base path: ${appDir.path}\n\n';
+      String info = _fs.getStorageInfo();
       
-      info += 'bin/ exists: ${await binDir.exists()}\n';
-      info += 'jdk/ exists: ${await jdkDir.exists()}\n';
-      info += 'java binary exists: ${await File(javaPath).exists()}\n\n';
-      
-      if (await jdkDir.exists()) {
-        info += 'JDK contents:\n';
-        await for (var entity in jdkDir.list(recursive: false)) {
-          info += '  ${entity.path.split('/').last}\n';
-        }
-      }
-      
-      final javaBinDir = Directory('${appDir.path}/bin/jdk/bin');
-      if (await javaBinDir.exists()) {
-        info += '\nbin/ contents:\n';
-        await for (var entity in javaBinDir.list()) {
-          final name = entity.path.split('/').last;
-          if (entity is File) {
-            final stat = await entity.stat();
-            info += '  $name (${stat.size} bytes)\n';
-          } else {
-            info += '  $name/\n';
-          }
-        }
-      }
-      
-      _showResult('File Structure', info, isError: false);
+      _showResult('File System Info', info, isError: false);
     } catch (e) {
       _showResult('Debug Error', 'Error: $e', isError: true);
     }
