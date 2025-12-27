@@ -23,15 +23,16 @@ class AppPermissionHandler {
     final shouldRequest = await _popup.showConfirmation(
       title: "Permissions Required",
       message: "PocketHost needs the following permissions:\n\n"
-          "📁 Storage Access\n"
-          "• Download and install Java\n"
-          "• Store Minecraft server files\n"
-          "• Save world data and backups\n\n"
-          "🔋 Ignore Battery Optimization\n"
+          "🔋 Ignore Battery Optimization (Critical)\n"
           "• Keep server running in background\n"
           "• Prevent Android from killing the app\n"
           "• Essential for 24/7 server hosting\n\n"
-          "Grant these permissions?",
+          "📁 Storage Access (Optional)\n"
+          "• For importing plugins/mods from Downloads\n"
+          "• Server files are stored in app's private storage\n"
+          "• Not required for basic functionality\n\n"
+          "Note: Battery optimization is the critical permission.\n"
+          "Storage can be skipped if not importing files.",
       confirmText: "Grant Permissions",
       cancelText: "Not Now",
     );
@@ -129,47 +130,74 @@ class AppPermissionHandler {
       granted.add("Battery Optimization");
     }
 
-    // 2. Storage (Critical)
+    // 2. Storage - Try multiple approaches for different Android versions
     _logger.info("Checking storage permission...");
-    final storageStatus = await Permission.storage.status;
     
-    if (storageStatus.isDenied) {
-      _logger.info("Requesting storage permission...");
-      final result = await Permission.storage.request();
-      
-      if (result.isGranted) {
-        _logger.success("✓ Storage granted");
-        granted.add("Storage Access");
-      } else if (result.isPermanentlyDenied) {
-        _logger.error("✗ Storage permanently denied");
-        permanentlyDenied.add("Storage Access");
-      } else {
-        _logger.warning("✗ Storage denied");
-        denied.add("Storage Access");
-      }
-    } else if (storageStatus.isGranted) {
-      _logger.success("✓ Storage already granted");
-      granted.add("Storage Access");
-    }
-
-    // 3. Manage External Storage (Optional for Android 11+)
-    _logger.info("Checking manage external storage...");
+    // For Android 11+ (API 30+), try manageExternalStorage first
     final manageStorageStatus = await Permission.manageExternalStorage.status;
     
     if (manageStorageStatus.isDenied) {
-      _logger.info("Requesting manage external storage...");
+      _logger.info("Requesting manage external storage (Android 11+)...");
       final result = await Permission.manageExternalStorage.request();
       
       if (result.isGranted) {
         _logger.success("✓ Manage external storage granted");
+        granted.add("Storage Access");
         granted.add("Manage External Storage");
       } else {
-        _logger.info("ℹ Manage external storage denied (optional)");
-        // Don't add to denied list, it's optional
+        _logger.warning("✗ Manage external storage denied, trying standard storage...");
+        
+        // Fall back to standard storage permission
+        final storageStatus = await Permission.storage.status;
+        
+        if (storageStatus.isDenied) {
+          _logger.info("Requesting standard storage permission...");
+          final storageResult = await Permission.storage.request();
+          
+          if (storageResult.isGranted) {
+            _logger.success("✓ Storage granted");
+            granted.add("Storage Access");
+          } else if (storageResult.isPermanentlyDenied) {
+            _logger.error("✗ Storage permanently denied");
+            permanentlyDenied.add("Storage Access");
+          } else {
+            _logger.warning("✗ Storage denied");
+            denied.add("Storage Access");
+          }
+        } else if (storageStatus.isGranted) {
+          _logger.success("✓ Storage already granted");
+          granted.add("Storage Access");
+        } else {
+          _logger.warning("✗ Storage access not available");
+          denied.add("Storage Access");
+        }
       }
     } else if (manageStorageStatus.isGranted) {
       _logger.success("✓ Manage external storage already granted");
+      granted.add("Storage Access");
       granted.add("Manage External Storage");
+    } else {
+      // Android 10 or below - use standard storage permission
+      final storageStatus = await Permission.storage.status;
+      
+      if (storageStatus.isDenied) {
+        _logger.info("Requesting storage permission...");
+        final result = await Permission.storage.request();
+        
+        if (result.isGranted) {
+          _logger.success("✓ Storage granted");
+          granted.add("Storage Access");
+        } else if (result.isPermanentlyDenied) {
+          _logger.error("✗ Storage permanently denied");
+          permanentlyDenied.add("Storage Access");
+        } else {
+          _logger.warning("✗ Storage denied");
+          denied.add("Storage Access");
+        }
+      } else if (storageStatus.isGranted) {
+        _logger.success("✓ Storage already granted");
+        granted.add("Storage Access");
+      }
     }
 
     final result = PermissionResult(
@@ -185,9 +213,12 @@ class AppPermissionHandler {
   /// Check if all critical permissions are already granted (no popup)
   static Future<bool> arePermissionsGranted() async {
     final batteryOpt = await Permission.ignoreBatteryOptimizations.isGranted;
+    
+    // Check either manage external storage OR standard storage
+    final manageStorage = await Permission.manageExternalStorage.isGranted;
     final storage = await Permission.storage.isGranted;
     
-    return batteryOpt && storage;
+    return batteryOpt && (manageStorage || storage);
   }
 
   /// Get detailed permission status
@@ -238,9 +269,7 @@ class PermissionResult {
 
   bool get allGranted => denied.isEmpty && permanentlyDenied.isEmpty && granted.isNotEmpty;
   bool get someGranted => granted.isNotEmpty;
-  bool get criticalGranted => 
-      granted.contains("Battery Optimization") && 
-      granted.contains("Storage Access");
+  bool get criticalGranted => granted.contains("Battery Optimization");
 
   String get summary => 
       "Granted: ${granted.length}, Denied: ${denied.length}, Permanently Denied: ${permanentlyDenied.length}";
