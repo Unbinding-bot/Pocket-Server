@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
-import 'package:PocketServer/services/debug_logger.dart';
-import 'package:PocketServer/services/popup_service.dart';
+import 'package:pocket_server/services/debug_logger.dart';
+import 'package:pocket_server/services/popup_service.dart';
 
 class JavaDownloader {
   static const String jdkUrl = 
@@ -46,6 +46,38 @@ class JavaDownloader {
     final javaPath = '${jdkDir.path}/bin/java';
     if (await File(javaPath).exists()) {
       await _makeExecutable(javaPath);
+      
+      // Test if it's actually executable
+      try {
+        _logger.info("Testing Java execution...");
+        final testResult = await Process.run(javaPath, ['--version']).timeout(
+          Duration(seconds: 5),
+          onTimeout: () => throw Exception('Java test timeout'),
+        );
+        
+        if (testResult.exitCode == 0 || testResult.stderr.toString().contains('version')) {
+          _logger.success("Java is executable and working!");
+        } else {
+          _logger.warning("Java executed but returned unexpected output");
+          _logger.info("Exit code: ${testResult.exitCode}");
+          _logger.info("Stderr: ${testResult.stderr}");
+        }
+      } catch (e) {
+        _logger.error("Java execution test failed: $e");
+        _logger.warning("Java binary may not be executable on this device");
+        
+        // Create a workaround script
+        final scriptPath = '${binDir.path}/run-java.sh';
+        final script = File(scriptPath);
+        await script.writeAsString('''#!/system/bin/sh
+export JAVA_HOME="${jdkDir.path}"
+export PATH="\$JAVA_HOME/bin:\$PATH"
+exec \$JAVA_HOME/bin/java "\$@"
+''');
+        await Process.run('chmod', ['755', scriptPath]);
+        _logger.info("Created wrapper script at: $scriptPath");
+      }
+      
       _logger.success("Java is ready at: $javaPath");
     } else {
       _logger.error("Java binary not found after extraction at: $javaPath");

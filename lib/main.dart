@@ -2,10 +2,10 @@
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
-import 'package:PocketServer/services/java_downloader.dart';
-import 'package:PocketServer/services/debug_logger.dart';
-import 'package:PocketServer/services/popup_service.dart';
-import 'package:PocketServer/services/permission_handler.dart';
+import 'package:pocket_server/services/java_downloader.dart';
+import 'package:pocket_server/services/debug_logger.dart';
+import 'package:pocket_server/services/popup_service.dart';
+import 'package:pocket_server/services/permission_handler.dart';
 
 void main() => runApp(MyApp());
 
@@ -314,8 +314,27 @@ class _JavaTestScreenState extends State<JavaTestScreen> {
       // Show loading while testing
       _popup.showLoading(message: "Testing Java...", canMinimize: false);
       
-      // Run java -version
-      final result = await Process.run(javaPath, ['-version']);
+      ProcessResult result;
+      
+      // Try Method 1: Direct execution
+      try {
+        _logger.info("Attempt 1: Direct execution");
+        result = await Process.run(javaPath, ['-version']);
+      } catch (e) {
+        _logger.warning("Direct execution failed: $e");
+        
+        // Try Method 2: Via sh wrapper
+        try {
+          _logger.info("Attempt 2: Via sh wrapper");
+          result = await Process.run('sh', ['$javaPath.sh', '-version']);
+        } catch (e2) {
+          _logger.warning("Sh wrapper failed: $e2");
+          
+          // Try Method 3: Via /system/bin/sh
+          _logger.info("Attempt 3: Via system shell");
+          result = await Process.run('/system/bin/sh', [javaPath, '-version']);
+        }
+      }
 
       final output = result.stderr.toString().trim();
       final stdoutput = result.stdout.toString().trim();
